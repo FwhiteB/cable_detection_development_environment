@@ -64,6 +64,7 @@ double inclThre = 45.0;
 double stopTime = 5.0;
 bool noRotAtStop = false;
 bool noRotAtGoal = true;
+double goalYawThre = 10.0;
 bool autonomyMode = false;
 double autonomySpeed = 1.0;
 double joyToSpeedDelay = 2.0;
@@ -214,6 +215,7 @@ int main(int argc, char** argv)
   nh->declare_parameter<double>("stopTime", stopTime);
   nh->declare_parameter<bool>("noRotAtStop", noRotAtStop);
   nh->declare_parameter<bool>("noRotAtGoal", noRotAtGoal);
+  nh->declare_parameter<double>("goalYawThre", goalYawThre);
   nh->declare_parameter<bool>("autonomyMode", autonomyMode);
   nh->declare_parameter<double>("autonomySpeed", autonomySpeed);
   nh->declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay);
@@ -243,6 +245,7 @@ int main(int argc, char** argv)
   nh->get_parameter("stopTime", stopTime);
   nh->get_parameter("noRotAtStop", noRotAtStop);
   nh->get_parameter("noRotAtGoal", noRotAtGoal);
+  nh->get_parameter("goalYawThre", goalYawThre);
   nh->get_parameter("autonomyMode", autonomyMode);
   nh->get_parameter("autonomySpeed", autonomySpeed);
   nh->get_parameter("joyToSpeedDelay", joyToSpeedDelay);
@@ -326,16 +329,34 @@ int main(int argc, char** argv)
         joySpeed2 *= -1;
       }
 
-      if (fabs(vehicleSpeed) < 2.0 * maxAccel / 100.0) vehicleYawRate = -stopYawRateGain * dirDiff;
-      else vehicleYawRate = -yawRateGain * dirDiff;
+      bool alignYawAtGoal = false;
+      float goalYawErr = 0;
+      if (!noRotAtGoal && goalYawValid && autonomyMode && endDis < stopDisThre) {
+        goalYawErr = vehicleYaw - goalYaw;
+        if (goalYawErr > PI) goalYawErr -= 2 * PI;
+        else if (goalYawErr < -PI) goalYawErr += 2 * PI;
+        alignYawAtGoal = true;
+      }
 
-      if (vehicleYawRate > maxYawRate * PI / 180.0) vehicleYawRate = maxYawRate * PI / 180.0;
-      else if (vehicleYawRate < -maxYawRate * PI / 180.0) vehicleYawRate = -maxYawRate * PI / 180.0;
+      if (alignYawAtGoal) {
+        joySpeed2 = 0;
+        vehicleSpeed = 0;
+        vehicleYawRate = -stopYawRateGain * goalYawErr;
+        if (vehicleYawRate > maxYawRate * PI / 180.0) vehicleYawRate = maxYawRate * PI / 180.0;
+        else if (vehicleYawRate < -maxYawRate * PI / 180.0) vehicleYawRate = -maxYawRate * PI / 180.0;
+        if (fabs(goalYawErr) < goalYawThre * PI / 180.0) vehicleYawRate = 0;
+      } else {
+        if (fabs(vehicleSpeed) < 2.0 * maxAccel / 100.0) vehicleYawRate = -stopYawRateGain * dirDiff;
+        else vehicleYawRate = -yawRateGain * dirDiff;
 
-      if (joySpeed2 == 0 && !autonomyMode) {
-        vehicleYawRate = maxYawRate * joyYaw * PI / 180.0;
-      } else if (pathSize <= 1 || (dis < stopDisThre && noRotAtGoal)) {
-        vehicleYawRate = 0;
+        if (vehicleYawRate > maxYawRate * PI / 180.0) vehicleYawRate = maxYawRate * PI / 180.0;
+        else if (vehicleYawRate < -maxYawRate * PI / 180.0) vehicleYawRate = -maxYawRate * PI / 180.0;
+
+        if (joySpeed2 == 0 && !autonomyMode) {
+          vehicleYawRate = maxYawRate * joyYaw * PI / 180.0;
+        } else if (pathSize <= 1 || (dis < stopDisThre && noRotAtGoal)) {
+          vehicleYawRate = 0;
+        }
       }
 
       if (pathSize <= 1) {
@@ -348,12 +369,14 @@ int main(int argc, char** argv)
       if (odomTime < slowInitTime + slowTime1 && slowInitTime > 0) joySpeed3 *= slowRate1;
       else if (odomTime < slowInitTime + slowTime1 + slowTime2 && slowInitTime > 0) joySpeed3 *= slowRate2;
 
-      if (fabs(dirDiff) < dirDiffThre && dis > stopDisThre) {
-        if (vehicleSpeed < joySpeed3) vehicleSpeed += maxAccel / 100.0;
-        else if (vehicleSpeed > joySpeed3) vehicleSpeed -= maxAccel / 100.0;
-      } else {
-        if (vehicleSpeed > 0) vehicleSpeed -= maxAccel / 100.0;
-        else if (vehicleSpeed < 0) vehicleSpeed += maxAccel / 100.0;
+      if (!alignYawAtGoal) {
+        if (fabs(dirDiff) < dirDiffThre && dis > stopDisThre) {
+          if (vehicleSpeed < joySpeed3) vehicleSpeed += maxAccel / 100.0;
+          else if (vehicleSpeed > joySpeed3) vehicleSpeed -= maxAccel / 100.0;
+        } else {
+          if (vehicleSpeed > 0) vehicleSpeed -= maxAccel / 100.0;
+          else if (vehicleSpeed < 0) vehicleSpeed += maxAccel / 100.0;
+        }
       }
 
       if (odomTime < stopInitTime + stopTime && stopInitTime > 0) {

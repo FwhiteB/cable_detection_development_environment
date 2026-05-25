@@ -10,6 +10,7 @@
   <arg name="joyToSpeedDelay" default="2.0"/>
   <arg name="goalX" default="0.0"/>
   <arg name="goalY" default="0.0"/>
+  <arg name="goalYawThre" default="10.0"/>
 
   <node pkg="local_planner" exec="localPlanner" name="localPlanner" output="screen">
     <param name="pathFolder" value="$(find-pkg-share local_planner)/paths" />
@@ -79,6 +80,7 @@
     <param name="stopTime" value="5.0" />
     <param name="noRotAtStop" value="false" />
     <param name="noRotAtGoal" value="true" />
+    <param name="goalYawThre" value="$(var goalYawThre)" />
     <param name="autonomyMode" value="$(var autonomyMode)" />
     <param name="autonomySpeed" value="$(var autonomySpeed)" />
     <param name="joyToSpeedDelay" value="$(var joyToSpeedDelay)" />
