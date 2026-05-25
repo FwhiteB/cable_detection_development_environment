@@ -11,7 +11,7 @@
 
 #include "std_msgs/msg/float32.hpp"
 #include "nav_msgs/msg/odometry.hpp"
-#include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
@@ -185,9 +185,10 @@ int main(int argc, char** argv)
   
   auto subPose = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, poseHandler);
   
-  auto pubWaypoint = nh->create_publisher<geometry_msgs::msg::PointStamped>("/way_point", 5);
-  geometry_msgs::msg::PointStamped waypointMsgs;
-  waypointMsgs.header.frame_id = "map";
+  auto pubGoalPose = nh->create_publisher<geometry_msgs::msg::PoseStamped>("/goal_pose", 5);
+  geometry_msgs::msg::PoseStamped goalPoseMsg;
+  goalPoseMsg.header.frame_id = "map";
+  goalPoseMsg.pose.orientation.w = 1.0;
   
   auto pubSpeed = nh->create_publisher<std_msgs::msg::Float32>("/speed", 5);
   std_msgs::msg::Float32 speedMsgs;
@@ -241,14 +242,14 @@ int main(int argc, char** argv)
       isWaiting = false;
     }
 
-    // publish waypoint, speed, and boundary messages at certain frame rate
+    // publish goal pose, speed, and boundary messages at certain frame rate
     if (curTime - waypointTime > 1.0 / frameRate) {
       if (!isWaiting) {
-        waypointMsgs.header.stamp = rclcpp::Time(static_cast<uint64_t>(curTime * 1e9));
-        waypointMsgs.point.x = waypoints->points[wayPointID].x;
-        waypointMsgs.point.y = waypoints->points[wayPointID].y;
-        waypointMsgs.point.z = waypoints->points[wayPointID].z;
-        pubWaypoint->publish(waypointMsgs);
+        goalPoseMsg.header.stamp = rclcpp::Time(static_cast<uint64_t>(curTime * 1e9));
+        goalPoseMsg.pose.position.x = waypoints->points[wayPointID].x;
+        goalPoseMsg.pose.position.y = waypoints->points[wayPointID].y;
+        goalPoseMsg.pose.position.z = waypoints->points[wayPointID].z;
+        pubGoalPose->publish(goalPoseMsg);
       }
 
       if (sendSpeed) {

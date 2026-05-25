@@ -17,7 +17,7 @@
 #include <nav_msgs/msg/path.hpp>
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
-#include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <sensor_msgs/msg/imu.h>
 
@@ -244,10 +244,10 @@ void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
   }
 }
 
-void goalHandler(const geometry_msgs::msg::PointStamped::ConstSharedPtr goal)
+void goalPoseHandler(const geometry_msgs::msg::PoseStamped::ConstSharedPtr goal)
 {
-  goalX = goal->point.x;
-  goalY = goal->point.y;
+  goalX = goal->pose.position.x;
+  goalY = goal->pose.position.y;
 }
 
 void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)
@@ -590,7 +590,7 @@ int main(int argc, char** argv)
 
   auto subJoystick = nh->create_subscription<sensor_msgs::msg::Joy>("/joy", 5, joystickHandler);
 
-  auto subGoal = nh->create_subscription<geometry_msgs::msg::PointStamped> ("/way_point", 5, goalHandler);
+  auto subGoalPose = nh->create_subscription<geometry_msgs::msg::PoseStamped>("/goal_pose", 5, goalPoseHandler);
 
   auto subSpeed = nh->create_subscription<std_msgs::msg::Float32>("/speed", 5, speedHandler);
 
