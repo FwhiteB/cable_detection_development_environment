@@ -11,6 +11,9 @@ log/*
 *~
 
 .DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 src/vehicle_simulator/mesh/*
 

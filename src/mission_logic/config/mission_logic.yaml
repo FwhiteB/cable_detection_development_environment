@@ -1,5 +1,44 @@
 mission_node:
-  ros__parameters: {}
+  ros__parameters:
+    step_x: 1.0
+    step_y: 0.0
+    magnetic_y_gain: 0.5
+    max_lateral_step: 1.0
+    workspace_min_x: -20.0
+    workspace_max_x: 20.0
+    workspace_min_y: -20.0
+    workspace_max_y: 20.0
+    detect_threshold: 0.2
+    loss_threshold: 0.08
+    center_magnetic_z_threshold: 0.05
+    search_probe_distance: 0.75
+    centering_step: 0.2
+    forward_step: 1.0
+    reacquire_probe_offset: 0.4
+    follow_heading_degrees: 0.0
+    orientation_check_interval: 3
+    arrival_tolerance: 0.1
+    speed: 1.0
+    goal_frame: map
+    goal_republish_period: 1.0
+    max_steps: 100
 
 magnetic_field_node:
-  ros__parameters: {}
+  ros__parameters:
+    pipeline_config_file: ""
+    model_type: simple
+    pipeline_name: straight_wire
+    pipeline_points:
+      - -1000.0
+      - 0.0
+      - -1.0
+      - 1000.0
+      - 0.0
+      - -1.0
+    source_strength: 1.0
+    background: 0.0
+    distance_floor: 0.1
+    attenuation_power: 2.0
+    current_scale: 100.0
+    signal_scale: 2000000.0
+    singularity_floor: 0.05

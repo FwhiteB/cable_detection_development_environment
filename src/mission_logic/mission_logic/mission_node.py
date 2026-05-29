@@ -1,5 +1,4 @@
 import math
-import random
 from typing import Optional
 
 import rclpy
@@ -9,7 +8,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import MagneticField
 from std_msgs.msg import Float32
 
-from mission_logic.models import MoveResult, ReceiverReading, RobotPose
+from mission_logic.models import MissionLogEntry, MissionState, MoveResult, ReceiverReading, RobotPose
 
 
 def quaternion_to_yaw(x, y, z, w):
@@ -127,8 +126,23 @@ class MissionNode(Node):
         super().__init__('mission_node')
 
         self.declare_parameter('step_x', 1.0)
-        self.declare_parameter('step_y', 1.0)
-        self.declare_parameter('arrival_tolerance', 0.3)
+        self.declare_parameter('step_y', 0.0)
+        self.declare_parameter('magnetic_y_gain', 0.5)
+        self.declare_parameter('max_lateral_step', 1.0)
+        self.declare_parameter('workspace_min_x', -20.0)
+        self.declare_parameter('workspace_max_x', 20.0)
+        self.declare_parameter('workspace_min_y', -20.0)
+        self.declare_parameter('workspace_max_y', 20.0)
+        self.declare_parameter('detect_threshold', 0.2)
+        self.declare_parameter('loss_threshold', 0.08)
+        self.declare_parameter('center_magnetic_z_threshold', 0.05)
+        self.declare_parameter('search_probe_distance', 0.75)
+        self.declare_parameter('centering_step', 0.2)
+        self.declare_parameter('forward_step', 1.0)
+        self.declare_parameter('reacquire_probe_offset', 0.4)
+        self.declare_parameter('follow_heading_degrees', 0.0)
+        self.declare_parameter('orientation_check_interval', 3)
+        self.declare_parameter('arrival_tolerance', 0.1)
         self.declare_parameter('speed', 1.0)
         self.declare_parameter('goal_frame', 'map')
         self.declare_parameter('goal_republish_period', 1.0)
@@ -136,6 +150,21 @@ class MissionNode(Node):
 
         self.step_x = self.get_parameter('step_x').value
         self.step_y = self.get_parameter('step_y').value
+        self.magnetic_y_gain = self.get_parameter('magnetic_y_gain').value
+        self.max_lateral_step = self.get_parameter('max_lateral_step').value
+        self.workspace_min_x = self.get_parameter('workspace_min_x').value
+        self.workspace_max_x = self.get_parameter('workspace_max_x').value
+        self.workspace_min_y = self.get_parameter('workspace_min_y').value
+        self.workspace_max_y = self.get_parameter('workspace_max_y').value
+        self.detect_threshold = self.get_parameter('detect_threshold').value
+        self.loss_threshold = self.get_parameter('loss_threshold').value
+        self.center_magnetic_z_threshold = self.get_parameter('center_magnetic_z_threshold').value
+        self.search_probe_distance = self.get_parameter('search_probe_distance').value
+        self.centering_step = self.get_parameter('centering_step').value
+        self.forward_step = self.get_parameter('forward_step').value
+        self.reacquire_probe_offset = self.get_parameter('reacquire_probe_offset').value
+        self.follow_heading_degrees = self.get_parameter('follow_heading_degrees').value
+        self.orientation_check_interval = int(self.get_parameter('orientation_check_interval').value)
         self.max_steps = self.get_parameter('max_steps').value
         goal_republish_period = self.get_parameter('goal_republish_period').value
 
@@ -151,6 +180,11 @@ class MissionNode(Node):
             speed=self.get_parameter('speed').value,
         )
         self.step_count = 0
+        self.state = MissionState.SEARCH_PEAK
+        self.follow_moves_since_center = 0
+        self.line_confirmed = False
+        self.log: list[MissionLogEntry] = []
+        self.done = False
 
         self.state_subscription = self.create_subscription(
             Odometry,
@@ -168,50 +202,168 @@ class MissionNode(Node):
             goal_republish_period,
             self.robot.publish_active_goal,
         )
+        self.control_timer = self.create_timer(0.2, self._advance_state_machine)
 
     def state_estimation_callback(self, odometry_msg):
         self.robot.update_pose(odometry_msg)
-
-        if self.robot.active_goal is None:
-            self._issue_next_move()
-            return
-
-        if self.robot.has_arrived():
-            pose, reading = self.robot.read()
-            self.get_logger().info(
-                'Reached step %d at x=%.2f y=%.2f. Reading available: %s'
-                % (self.step_count, pose.x, pose.y, reading is not None)
-            )
-            self._issue_next_move()
+        self._advance_state_machine()
 
     def magnetic_field_callback(self, magnetic_field_msg):
         self.robot.update_reading(magnetic_field_msg)
+        self._advance_state_machine()
 
-    def _issue_next_move(self):
-        if self.robot.pose is None:
+    def _advance_state_machine(self):
+        if self.done or self.robot.pose is None or self.robot.reading is None:
             return
+
+        if self.robot.active_goal is not None:
+            if not self.robot.has_arrived():
+                return
+            self._record_log('arrived at active goal')
+            self.robot.active_goal = None
 
         if self.step_count >= self.max_steps:
-            self.get_logger().info('Mission reached max_steps=%d.' % self.max_steps)
+            self._complete(MissionState.FAILED, 'Mission reached max_steps=%d.' % self.max_steps)
             return
 
-        base_pose = self.robot.pose
-        next_x = base_pose.x + self.step_x
-        next_y = base_pose.y + self.step_y
-        random_yaw = random.uniform(-math.pi, math.pi)
+        for _ in range(8):
+            if self.done or self.robot.active_goal is not None:
+                return
+            if not self._tick_state_without_active_goal():
+                return
 
-        move_result = self.robot.move_to(next_x, next_y, random_yaw)
+    def _tick_state_without_active_goal(self):
+        reading = self.robot.reading
+        signal = reading.signal_strength
+
+        if self.state == MissionState.SEARCH_PEAK:
+            if signal >= self.detect_threshold:
+                self._transition(MissionState.CENTER_ON_LINE, 'detected magnetic signal')
+                return True
+            self._issue_lateral_move(self.search_probe_distance, 'search peak')
+            return False
+
+        if self.state == MissionState.CENTER_ON_LINE:
+            if abs(reading.magnetic_z) <= self.center_magnetic_z_threshold:
+                self.line_confirmed = signal >= self.loss_threshold
+                self.follow_moves_since_center = 0
+                self._transition(MissionState.MEASURE_ON_LINE, 'centered on magnetic line')
+                return True
+            self._issue_lateral_move(self.centering_step, 'center on line')
+            return False
+
+        if self.state == MissionState.MEASURE_ON_LINE:
+            self._record_log('measurement on line')
+            self._transition(MissionState.FOLLOW_LINE, 'measurement complete')
+            return True
+
+        if self.state == MissionState.FOLLOW_LINE:
+            if signal < self.loss_threshold:
+                self._transition(MissionState.REACQUIRE, 'magnetic signal lost')
+                return True
+            if self.follow_moves_since_center >= self.orientation_check_interval:
+                self.follow_moves_since_center = 0
+                self._transition(MissionState.CENTER_ON_LINE, 'periodic centering check')
+                return True
+            self._issue_forward_move('follow line')
+            self.follow_moves_since_center += 1
+            return False
+
+        if self.state == MissionState.REACQUIRE:
+            if signal >= self.detect_threshold:
+                self._transition(MissionState.CENTER_ON_LINE, 'reacquired magnetic signal')
+                return True
+            self._issue_lateral_move(self.reacquire_probe_offset, 'reacquire line')
+            return False
+
+        return False
+
+    def _issue_forward_move(self, reason):
+        heading_rad = math.radians(self.follow_heading_degrees)
+        dx = math.cos(heading_rad) * self.forward_step
+        dy = math.sin(heading_rad) * self.forward_step
+        self._issue_move_by(dx, dy, heading_rad, reason)
+
+    def _issue_lateral_move(self, step_size, reason):
+        reading = self.robot.reading
+        if abs(reading.magnetic_z) <= 1e-9:
+            correction = self.step_y
+        else:
+            correction = -math.copysign(step_size, reading.magnetic_z)
+
+        heading_rad = math.radians(self.follow_heading_degrees)
+        left_x = -math.sin(heading_rad)
+        left_y = math.cos(heading_rad)
+        dx = left_x * correction
+        dy = left_y * correction
+        yaw = math.atan2(dy, dx) if abs(dx) > 1e-9 or abs(dy) > 1e-9 else self.robot.pose.yaw
+        self._issue_move_by(dx, dy, yaw, reason)
+
+    def _issue_move_by(self, dx, dy, yaw, reason):
+        pose = self.robot.pose
+        target_x = self._clamp(pose.x + dx, self.workspace_min_x, self.workspace_max_x)
+        target_y = self._clamp(pose.y + dy, self.workspace_min_y, self.workspace_max_y)
+
+        if math.hypot(target_x - pose.x, target_y - pose.y) <= 1e-9:
+            if self.line_confirmed:
+                self._complete(MissionState.COMPLETE, 'workspace boundary reached')
+            else:
+                self._transition(MissionState.REACQUIRE, 'no available motion in workspace')
+            return
+
+        move_result = self.robot.move_to(target_x, target_y, yaw)
         self.step_count += 1
-
         self.get_logger().info(
-            'Step %d target: x=%.2f y=%.2f yaw=%.2f rad'
+            'Step %d state=%s target: x=%.2f y=%.2f yaw=%.2f reason=%s signal=%.3f'
             % (
                 self.step_count,
+                self.state.value,
                 move_result.target.x,
                 move_result.target.y,
                 move_result.target.yaw,
+                reason,
+                self.robot.reading.signal_strength,
             )
         )
+
+    def _transition(self, next_state, reason):
+        if self.state == next_state:
+            return
+        self.get_logger().info('%s -> %s: %s' % (self.state.value, next_state.value, reason))
+        self.state = next_state
+
+    def _record_log(self, note):
+        if self.robot.pose is None or self.robot.reading is None:
+            return
+        self.log.append(
+            MissionLogEntry(
+                step=self.step_count,
+                state=self.state,
+                pose=self.robot.pose,
+                reading=self.robot.reading,
+                note=note,
+            )
+        )
+        self.get_logger().info(
+            'Log state=%s pose=(%.2f, %.2f) signal=%.3f note=%s'
+            % (
+                self.state.value,
+                self.robot.pose.x,
+                self.robot.pose.y,
+                self.robot.reading.signal_strength,
+                note,
+            )
+        )
+
+    def _complete(self, final_state, reason):
+        self.done = True
+        self.state = final_state
+        self._record_log(reason)
+        self.get_logger().info('Mission finished with state=%s: %s' % (final_state.value, reason))
+
+    @staticmethod
+    def _clamp(value, lower, upper):
+        return max(lower, min(upper, value))
 
 
 def main(args=None):
