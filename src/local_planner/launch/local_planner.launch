@@ -79,7 +79,7 @@
     <param name="inclThre" value="45.0" />
     <param name="stopTime" value="5.0" />
     <param name="noRotAtStop" value="false" />
-    <param name="noRotAtGoal" value="true" />
+    <param name="noRotAtGoal" value="false" />
     <param name="goalYawThre" value="$(var goalYawThre)" />
     <param name="autonomyMode" value="$(var autonomyMode)" />
     <param name="autonomySpeed" value="$(var autonomySpeed)" />

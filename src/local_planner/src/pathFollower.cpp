@@ -15,6 +15,7 @@
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/imu.h>
 
@@ -90,6 +91,8 @@ float vehicleYawRec = 0;
 
 float vehicleYawRate = 0;
 float vehicleSpeed = 0;
+float goalYaw = 0;
+bool goalYawValid = false;
 
 double odomTime = 0;
 double joyTime = 0;
@@ -145,6 +148,16 @@ void pathHandler(const nav_msgs::msg::Path::ConstSharedPtr pathIn)
 
   pathPointID = 0;
   pathInit = true;
+}
+
+void goalPoseHandler(const geometry_msgs::msg::PoseStamped::ConstSharedPtr goal)
+{
+  double roll, pitch, yaw;
+  geometry_msgs::msg::Quaternion geoQuat = goal->pose.orientation;
+  tf2::Matrix3x3(tf2::Quaternion(geoQuat.x, geoQuat.y, geoQuat.z, geoQuat.w)).getRPY(roll, pitch, yaw);
+
+  goalYaw = yaw;
+  goalYawValid = true;
 }
 
 void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
@@ -253,6 +266,8 @@ int main(int argc, char** argv)
   auto subOdom = nh->create_subscription<nav_msgs::msg::Odometry>("/state_estimation", 5, odomHandler);
 
   auto subPath = nh->create_subscription<nav_msgs::msg::Path>("/path", 5, pathHandler);
+
+  auto subGoalPose = nh->create_subscription<geometry_msgs::msg::PoseStamped>("/goal_pose", 5, goalPoseHandler);
 
   auto subJoystick = nh->create_subscription<sensor_msgs::msg::Joy>("/joy", 5, joystickHandler);
 
