@@ -1,0 +1,5 @@
+mission_node:
+  ros__parameters: {}
+
+magnetic_field_node:
+  ros__parameters: {}
