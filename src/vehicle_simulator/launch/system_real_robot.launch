@@ -3,6 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource, FrontendLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration 
@@ -12,11 +13,17 @@ def generate_launch_description():
   vehicleX = LaunchConfiguration('vehicleX')
   vehicleY = LaunchConfiguration('vehicleY')
   checkTerrainConn = LaunchConfiguration('checkTerrainConn')
+  startMissionLogic = LaunchConfiguration('start_mission_logic')
   
   declare_cameraOffsetZ = DeclareLaunchArgument('cameraOffsetZ', default_value='0.0', description='')
   declare_vehicleX = DeclareLaunchArgument('vehicleX', default_value='0.0', description='')
   declare_vehicleY = DeclareLaunchArgument('vehicleY', default_value='0.0', description='')
   declare_checkTerrainConn = DeclareLaunchArgument('checkTerrainConn', default_value='true', description='')
+  declare_startMissionLogic = DeclareLaunchArgument(
+    'start_mission_logic',
+    default_value='false',
+    description='Start mission_logic on the real robot topic graph.',
+  )
   
   start_local_planner = IncludeLaunchDescription(
     FrontendLaunchDescriptionSource(os.path.join(
@@ -56,6 +63,17 @@ def generate_launch_description():
     )
   )
 
+  start_mission_logic = IncludeLaunchDescription(
+    PythonLaunchDescriptionSource(os.path.join(
+      get_package_share_directory('mission_logic'), 'launch', 'mission_logic.launch.py')
+    ),
+    condition=IfCondition(startMissionLogic),
+    launch_arguments={
+      'use_sim_magnetic_field': 'false',
+      'start_mission_node': 'true',
+    }.items()
+  )
+
   start_joy = Node(
     package='joy', 
     executable='joy_node',
@@ -90,12 +108,14 @@ def generate_launch_description():
   ld.add_action(declare_vehicleX)
   ld.add_action(declare_vehicleY)
   ld.add_action(declare_checkTerrainConn)
+  ld.add_action(declare_startMissionLogic)
 
   ld.add_action(start_local_planner)
   ld.add_action(start_terrain_analysis)
   ld.add_action(start_terrain_analysis_ext)
   ld.add_action(start_sensor_scan_generation)
   ld.add_action(start_loam_interface)
+  ld.add_action(start_mission_logic)
   ld.add_action(start_joy)
   ld.add_action(delayed_start_rviz)
 
