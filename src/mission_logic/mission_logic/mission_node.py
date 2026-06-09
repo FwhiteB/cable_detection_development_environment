@@ -5,7 +5,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from sensor_msgs.msg import MagneticField
+from mission_logic_msgs.msg import SensorMsg
 from std_msgs.msg import Float32
 
 from mission_logic.models import MissionLogEntry, MissionState, MoveResult, ReceiverReading, RobotPose
@@ -193,7 +193,7 @@ class MissionNode(Node):
             10,
         )
         self.magnetic_field_subscription = self.create_subscription(
-            MagneticField,
+            SensorMsg,
             '/magnetic_field',
             self.magnetic_field_callback,
             10,
@@ -229,7 +229,7 @@ class MissionNode(Node):
         for _ in range(8):
             if self.done or self.robot.active_goal is not None:
                 return
-            if not self._tick_state_without_active_goal():
+            if not self._tick_state_without_active_goal(): # 如果不循环，则在切换状态的时候就要耗时不少
                 return
 
     def _tick_state_without_active_goal(self):

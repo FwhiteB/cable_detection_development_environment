@@ -5,7 +5,7 @@ import rclpy
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from sensor_msgs.msg import MagneticField
+from mission_logic_msgs.msg import SensorMsg
 from visualization_msgs.msg import Marker
 
 from mission_logic.geometry import Point3D
@@ -41,7 +41,7 @@ class MagneticFieldNode(Node):
             10,
         )
         self.magnetic_field_publisher = self.create_publisher(
-            MagneticField,
+            SensorMsg,
             '/magnetic_field',
             10,
         )
