@@ -59,7 +59,13 @@ class Robot:
         )
 
     def update_reading(self, magnetic_field_msg):
-        field = magnetic_field_msg.magnetic_field
+        # 这里进行修改
+        raw_field = magnetic_field_msg.magnetic_field 
+        field = Point3D()
+        field.y = raw_field.y * math.cos(yaw) - raw_field.x * sin(yaw)
+        field.x = raw_field.y * math.sin(yaw) + raw_field.x * cos(yaw)
+        field.z = 0 # 这个用不到
+
         stamp = magnetic_field_msg.header.stamp
         self.reading = ReceiverReading(
             magnetic_x=field.x,
@@ -234,7 +240,8 @@ class MissionNode(Node):
 
     def _tick_state_without_active_goal(self):
         reading = self.robot.reading
-        signal = reading.signal_strength
+        # signal = reading.signal_strength
+        signal = reading.magnetic_y
 
         if self.state == MissionState.SEARCH_PEAK:
             if signal >= self.detect_threshold:

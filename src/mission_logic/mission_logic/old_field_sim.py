@@ -82,7 +82,8 @@ class FieldMeasurement:
     true_depth: float | None
     current_value: float | None
     magnetic_field: Point3D | None = None
-
+    magnetic_x: float | None
+    magnetic_y: float | None
 
 class SimpleFieldModel:
     """Distance-based approximate field model.
@@ -120,7 +121,9 @@ class SimpleFieldModel:
         return self._pipelines
 
     def sample(self, position: Point3D) -> FieldMeasurement:
-        total_signal = self.background
+        total_signal = self.background # 应该抛弃，改成下面两个使用矢量的
+        total_signal_x = self.background
+        total_signal_y = self.background
         nearest_pipeline: Pipeline | None = None
         nearest_point: Point3D | None = None
         nearest_distance: float | None = None
@@ -130,7 +133,20 @@ class SimpleFieldModel:
             closest, tangent = pipeline.closest_projection(position)
             dist = distance(position, closest)
             effective_distance = max(dist, self.distance_floor)
-            total_signal += pipeline.source_strength / (effective_distance**self.attenuation_power)
+            total_signal += pipeline.source_strength / (effective_distance**self.attenuation_power) # 应该改成下面这种
+
+            # 计算磁场方向
+            magnetic_tangent_x = tangent.y
+            magnetic_tangent_y = - tangent.x
+            distance_x = position.x - closest.x
+            distance_y = position.y - closest.y
+            vector_dot_product = magnetic_tangent_x * distance_x + magnetic_tangent_y * distance_y
+            if vector_dot_product < 0:
+                magnetic_tangent_x = -1 * magnetic_tangent_x
+                magnetic_tangent_y = -1 * magnetic_tangent_y
+            total_signal_x += (pipeline.source_strength * magnetic_tangent_x) / (effective_distance ** self.attenuation_power)
+            total_signal_y += (pipeline.source_strength * magnetic_tangent_y) / (effective_distance ** self.attenuation_power)
+
 
             if nearest_distance is None or dist < nearest_distance:
                 nearest_pipeline = pipeline
@@ -149,7 +165,9 @@ class SimpleFieldModel:
                 lateral_offset=None,
                 true_depth=None,
                 current_value=None,
-            )
+                magnetic_x = total_signal_x,
+                magnetic_y = total_signal_y
+            ) 
 
         tangent_xy_norm = hypot(nearest_tangent.x, nearest_tangent.y)
         if tangent_xy_norm == 0.0:

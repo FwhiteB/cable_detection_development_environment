@@ -55,7 +55,11 @@ class MagneticFieldNode(Node):
             odometry_msg.pose.pose.position.z,
         )
         measurement = self.field_model.sample(position)
-        field_vector = self._field_vector(measurement, position)
+        # field_vector = self._field_vector(measurement, position)
+        field_vector = Point3D()
+        field_vector.x = measurement.magnetic_x
+        field_vector.y = measurement.magnetic_y
+        field_vector.z = 0
 
         magnetic_field_msg = SensorMsg()
         magnetic_field_msg.header.stamp = odometry_msg.header.stamp
