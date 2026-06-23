@@ -29,14 +29,16 @@ class Robot:
         goal_pose_publisher,
         speed_publisher,
         goal_frame='map',
-        arrival_tolerance=0.3,
+        arrival_tolerance_distance = 0.2,
+        arrival_tolerance_yaw_rad = math.radians(10.0),
         speed=1.0,
     ):
         self._node = node
         self._goal_pose_publisher = goal_pose_publisher
         self._speed_publisher = speed_publisher
         self._goal_frame = goal_frame
-        self._arrival_tolerance = arrival_tolerance
+        self._arrival_tolerance_distance = arrival_tolerance_distance
+        self._arrival_tolerance_yaw_rad = arrival_tolerance_yaw_rad
         self._speed = speed
 
         self.pose: Optional[RobotPose] = None
@@ -115,10 +117,14 @@ class Robot:
     def has_arrived(self):
         if self.pose is None or self.active_goal is None:
             return False
-
         dx = self.pose.x - self.active_goal.x
         dy = self.pose.y - self.active_goal.y
-        return math.hypot(dx, dy) <= self._arrival_tolerance
+        dyaw = self.pose.yaw - self.active_goal.yaw
+        yaw_error = abs(math.atan2(math.sin(dyaw), math.cos(dyaw)))
+        return (
+            math.hypot(dx, dy) <= self._arrival_tolerance_distance
+            and yaw_error <= self._arrival_tolerance_yaw_rad
+        )
 
     def _publish_speed(self):
         speed_msg = Float32()
@@ -147,7 +153,8 @@ class MissionNode(Node):
         self.declare_parameter('reacquire_probe_offset', 0.4)
         self.declare_parameter('follow_heading_degrees', 0.0)
         self.declare_parameter('orientation_check_interval', 3)
-        self.declare_parameter('arrival_tolerance', 0.1)
+        self.declare_parameter('arrival_tolerance_distance', 0.2)
+        self.declare_parameter('arrival_tolerance_yaw_degree', 10.0)
         self.declare_parameter('speed', 1.0)
         self.declare_parameter('goal_frame', 'map')
         self.declare_parameter('goal_republish_period', 1.0)
@@ -181,7 +188,10 @@ class MissionNode(Node):
             goal_pose_publisher=self.goal_pose_publisher,
             speed_publisher=self.speed_publisher,
             goal_frame=self.get_parameter('goal_frame').value,
-            arrival_tolerance=self.get_parameter('arrival_tolerance').value,
+            arrival_tolerance_distance=self.get_parameter('arrival_tolerance_distance').value,
+            arrival_tolerance_yaw_rad=math.radians(
+                self.get_parameter('arrival_tolerance_yaw_degree').value
+                ),
             speed=self.get_parameter('speed').value,
         )
         self.step_count = 0
@@ -190,6 +200,10 @@ class MissionNode(Node):
         self.line_confirmed = False
         self.log: list[MissionLogEntry] = []
         self.done = False
+        self.phase = "normal"
+        self.rotation_count = 0
+        self.max_yaw = 0
+        self.max_signal = 0
 
         self.state_subscription = self.create_subscription(
             Odometry,
@@ -221,6 +235,29 @@ class MissionNode(Node):
         if self.done or self.robot.pose is None or self.robot.reading is None:
             return
 
+        # rotation_trial module
+        if self.phase == "rotation_trial":
+            if self.robot.active_goal is not None and not self.robot.has_arrived():
+                return
+            if self.robot.has_arrived():
+                self.robot.active_goal = None
+                if self.max_signal < self.robot.reading.signal_strength:
+                    self.max_yaw = self.robot.pose.yaw
+                    self.max_signal = self.robot.reading.signal_strength
+            if self.rotation_count < 12:
+                self.rotation_count += 1
+                self.robot.move_to(self.robot.pose.x, self.robot.pose.y, self.robot.pose.yaw + math.radians(30))
+                return
+            else:
+                self.phase = "normal"
+                dx = math.cos(self.max_yaw) * self.search_probe_distance
+                dy = math.sin(self.max_yaw) * self.search_probe_distance
+                self._issue_move_by(dx, dy, self.max_yaw, 'search peak')
+                self.rotation_count = 0
+                self.max_yaw = 0
+                self.max_signal = 0
+                return
+
         if self.robot.active_goal is not None:
             if not self.robot.has_arrived():
                 return
@@ -243,15 +280,15 @@ class MissionNode(Node):
         
 
         if self.state == MissionState.SEARCH_PEAK:
-            if signal >= self.detect_threshold:
+            if reading.left_arrow or reading.right_arrow: # notice: should be converted to l-r arrows
                 self._transition(MissionState.CENTER_ON_LINE, 'detected magnetic signal')
                 return True
-            self._issue_lateral_move(self.search_probe_distance, 'search peak')
+            self._issue_searching_move('search peak')
             return False
 
         if self.state == MissionState.CENTER_ON_LINE:
-            if reading.left_arrow and reading.right_arrow: # notice: 这里的判定方法要修改
-                self.line_confirmed = signal >= self.loss_threshold
+            if reading.left_arrow and reading.right_arrow: # notice: check
+                self.line_confirmed = signal >= self.loss_threshold # notice: should be converted to l-r arrows
                 self.follow_moves_since_center = 0
                 self._transition(MissionState.MEASURE_ON_LINE, 'centered on magnetic line')
                 return True
@@ -264,7 +301,7 @@ class MissionNode(Node):
             return True
 
         if self.state == MissionState.FOLLOW_LINE:
-            if signal < self.loss_threshold:
+            if signal < self.loss_threshold: # notice: should be converted to l-r arrows
                 self._transition(MissionState.REACQUIRE, 'magnetic signal lost')
                 return True
             if self.follow_moves_since_center >= self.orientation_check_interval:
@@ -276,7 +313,7 @@ class MissionNode(Node):
             return False
 
         if self.state == MissionState.REACQUIRE:
-            if signal >= self.detect_threshold:
+            if signal >= self.detect_threshold: # notice: should be converted to l-r arrows
                 self._transition(MissionState.CENTER_ON_LINE, 'reacquired magnetic signal')
                 return True
             self._issue_lateral_move(self.reacquire_probe_offset, 'reacquire line')
@@ -284,12 +321,21 @@ class MissionNode(Node):
 
         return False
 
+    def _issue_searching_move(self, reason): # notice: todo
+        if self.robot.reading.left_arrow or self.robot.reading.right_arrow:
+            return
+        self.phase = "rotation_trial"
+        self.rotation_count = 0
+        self.max_yaw = self.robot.pose.yaw
+        self.max_signal = self.robot.reading.signal_strength
+        return
+        
+        
+        
+
     def _issue_forward_move(self, reason):
-        heading_degrees = self.robot.reading.pipeline_heading_degrees + self.robot.pose.yaw # notice: pipeline_heading_degrees may in degrees
-        if heading_degrees < 0:
-            heading_degrees += 2 * math.pi
-        elif heading_degrees >= 2 * math.pi:
-            heading_degrees -= 2 * math.pi
+        heading_rad = math.radians(self.robot.reading.pipeline_heading_degrees) + self.robot.pose.yaw # notice: radian or degree
+        heading_rad = heading_rad % (2 * math.pi)  
         dx = math.cos(heading_rad) * self.forward_step
         dy = math.sin(heading_rad) * self.forward_step
         self._issue_move_by(dx, dy, heading_rad, reason)
@@ -297,7 +343,7 @@ class MissionNode(Node):
     def _issue_lateral_move(self, step_size, reason):
         reading = self.robot.reading
         if reading.left_arrow and reading.right_arrow:
-            correction = self.step_y
+            return # notice: 是否会有潜在的问题
         else:
             correction = -math.copysign(step_size, reading.magnetic_z)
 
