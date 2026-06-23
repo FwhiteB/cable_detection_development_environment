@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import atan2, degrees, hypot, isfinite, pi
 
 from .geometry import Point3D, closest_point_on_segment, distance
+from mission_logic.models import RobotPose
 
 
 MU0 = 4.0 * pi * 1e-7
@@ -81,7 +82,7 @@ class FieldMeasurement:
     lateral_offset: float | None
     true_depth: float | None
     current_value: float | None
-    magnetic_field: Point3D | None = None
+    magnetic_field: Point3D | None
     magnetic_x: float | None
     magnetic_y: float | None
 
@@ -120,7 +121,7 @@ class SimpleFieldModel:
     def pipelines(self) -> tuple[Pipeline, ...]:
         return self._pipelines
 
-    def sample(self, position: Point3D) -> FieldMeasurement:
+    def sample(self, position: RobotPose) -> FieldMeasurement:
         total_signal = self.background # 应该抛弃，改成下面两个使用矢量的
         total_signal_x = self.background
         total_signal_y = self.background
@@ -245,7 +246,7 @@ class BiotSavartFieldModel:
     def pipelines(self) -> tuple[Pipeline, ...]:
         return self._pipelines
 
-    def sample(self, position: Point3D) -> FieldMeasurement:
+    def sample(self, position: RobotPose) -> FieldMeasurement:
         total_field = Point3D(0.0, 0.0, 0.0)
         nearest_pipeline: Pipeline | None = None
         nearest_point: Point3D | None = None

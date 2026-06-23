@@ -26,19 +26,16 @@ class RobotPose:
 
 @dataclass(frozen=True)
 class ReceiverReading:
-    magnetic_x: float
-    magnetic_y: float
-    magnetic_z: float
+    signal_strength: float
+    depth: float
+    current: float
+    pipeline_heading_degrees: float
+    signal_strength_percent: float
+    left_arrow: bool
+    right_arrow: bool
     stamp_sec: float
     frame_id: str
 
-    @property
-    def signal_strength(self) -> float:
-        return math.sqrt(
-            self.magnetic_x * self.magnetic_x
-            + self.magnetic_y * self.magnetic_y
-            + self.magnetic_z * self.magnetic_z
-        )
 
 
 @dataclass(frozen=True)

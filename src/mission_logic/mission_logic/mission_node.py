@@ -7,6 +7,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from mission_logic_msgs.msg import SensorMsg
 from std_msgs.msg import Float32
+from mission_logica import Point3D
 
 from mission_logic.models import MissionLogEntry, MissionState, MoveResult, ReceiverReading, RobotPose
 
@@ -59,18 +60,16 @@ class Robot:
         )
 
     def update_reading(self, magnetic_field_msg):
-        # 这里进行修改
-        raw_field = magnetic_field_msg.magnetic_field 
-        field = Point3D()
-        field.y = raw_field.y * math.cos(yaw) - raw_field.x * sin(yaw)
-        field.x = raw_field.y * math.sin(yaw) + raw_field.x * cos(yaw)
-        field.z = 0 # 这个用不到
 
         stamp = magnetic_field_msg.header.stamp
         self.reading = ReceiverReading(
-            magnetic_x=field.x,
-            magnetic_y=field.y,
-            magnetic_z=field.z,
+            signal_strength = magnetic_field_msg.signal_strength,
+            depth = magnetic_field_msg.depth_meters,
+            current = magnetic_field_msg.current_milliamps,
+            pipeline_heading_degrees = magnetic_field_msg.pipeline_heading_degrees,
+            signal_strength_percent = magnetic_field_msg.signal_strength_percent,
+            left_arrow = magnetic_field_msg.left_arrow,
+            right_arrow = magnetic_field_msg.right_arrow,
             stamp_sec=float(stamp.sec) + float(stamp.nanosec) * 1e-9,
             frame_id=magnetic_field_msg.header.frame_id,
         )
@@ -164,12 +163,12 @@ class MissionNode(Node):
         self.workspace_max_y = self.get_parameter('workspace_max_y').value
         self.detect_threshold = self.get_parameter('detect_threshold').value
         self.loss_threshold = self.get_parameter('loss_threshold').value
-        self.center_magnetic_z_threshold = self.get_parameter('center_magnetic_z_threshold').value
+        self.center_magnetic_z_threshold = self.get_parameter('center_magnetic_z_threshold').value  # notice: useless
         self.search_probe_distance = self.get_parameter('search_probe_distance').value
         self.centering_step = self.get_parameter('centering_step').value
         self.forward_step = self.get_parameter('forward_step').value
         self.reacquire_probe_offset = self.get_parameter('reacquire_probe_offset').value
-        self.follow_heading_degrees = self.get_parameter('follow_heading_degrees').value
+        self.follow_heading_degrees = self.get_parameter('follow_heading_degrees').value  # useless
         self.orientation_check_interval = int(self.get_parameter('orientation_check_interval').value)
         self.max_steps = self.get_parameter('max_steps').value
         goal_republish_period = self.get_parameter('goal_republish_period').value
@@ -240,8 +239,8 @@ class MissionNode(Node):
 
     def _tick_state_without_active_goal(self):
         reading = self.robot.reading
-        # signal = reading.signal_strength
-        signal = reading.magnetic_y
+        signal = reading.signal_strength
+        
 
         if self.state == MissionState.SEARCH_PEAK:
             if signal >= self.detect_threshold:
@@ -251,7 +250,7 @@ class MissionNode(Node):
             return False
 
         if self.state == MissionState.CENTER_ON_LINE:
-            if abs(reading.magnetic_z) <= self.center_magnetic_z_threshold:
+            if reading.left_arrow and reading.right_arrow: # notice: 这里的判定方法要修改
                 self.line_confirmed = signal >= self.loss_threshold
                 self.follow_moves_since_center = 0
                 self._transition(MissionState.MEASURE_ON_LINE, 'centered on magnetic line')
@@ -286,14 +285,18 @@ class MissionNode(Node):
         return False
 
     def _issue_forward_move(self, reason):
-        heading_rad = math.radians(self.follow_heading_degrees)
+        heading_degrees = self.robot.reading.pipeline_heading_degrees + self.robot.pose.yaw # notice: pipeline_heading_degrees may in degrees
+        if heading_degrees < 0:
+            heading_degrees += 2 * math.pi
+        elif heading_degrees >= 2 * math.pi:
+            heading_degrees -= 2 * math.pi
         dx = math.cos(heading_rad) * self.forward_step
         dy = math.sin(heading_rad) * self.forward_step
         self._issue_move_by(dx, dy, heading_rad, reason)
 
     def _issue_lateral_move(self, step_size, reason):
         reading = self.robot.reading
-        if abs(reading.magnetic_z) <= 1e-9:
+        if reading.left_arrow and reading.right_arrow:
             correction = self.step_y
         else:
             correction = -math.copysign(step_size, reading.magnetic_z)

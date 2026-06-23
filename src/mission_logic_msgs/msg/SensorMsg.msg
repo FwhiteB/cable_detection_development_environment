@@ -3,10 +3,11 @@ std_msgs/Header header
 geometry_msgs/Vector3 magnetic_field
 float64[9] magnetic_field_covariance
 
+float32 signal_strength
 float32 depth_meters
 float32 current_milliamps
 float32 pipeline_heading_degrees
-int8 signal_strength_percent
+float32 signal_strength_percent
 
 bool left_arrow
 bool right_arrow

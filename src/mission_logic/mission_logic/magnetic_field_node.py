@@ -11,6 +11,9 @@ from visualization_msgs.msg import Marker
 from mission_logic.geometry import Point3D
 from mission_logic.old_field_sim import BiotSavartFieldModel, Pipeline, SimpleFieldModel
 
+from mission_logic.models import RobotPose
+from mission_logic.mission_node import quaternion_to_yaw
+
 
 class MagneticFieldNode(Node):
     def __init__(self):
@@ -49,14 +52,17 @@ class MagneticFieldNode(Node):
         self.create_timer(1.0, self.publish_pipeline_marker)
 
     def state_estimation_callback(self, odometry_msg):
-        position = Point3D(
+        orientation = odometry_msg.pose.pose.orientation
+        yaw = quaternion_to_yaw(orientation.x, orientation.y, orientation.z, orientation.w)
+        position = RobotPose(
             odometry_msg.pose.pose.position.x,
             odometry_msg.pose.pose.position.y,
             odometry_msg.pose.pose.position.z,
+            yaw
         )
         measurement = self.field_model.sample(position)
         # field_vector = self._field_vector(measurement, position)
-        field_vector = Point3D()
+        field_vector = Point3D(0, 0, 0)
         field_vector.x = measurement.magnetic_x
         field_vector.y = measurement.magnetic_y
         field_vector.z = 0
@@ -68,6 +74,14 @@ class MagneticFieldNode(Node):
         magnetic_field_msg.magnetic_field.y = field_vector.y
         magnetic_field_msg.magnetic_field.z = field_vector.z
         magnetic_field_msg.magnetic_field_covariance = [0.0] * 9
+
+        # convert to dashboard readings
+        field = Point3D(0, 0, 0)
+        field.y = field_vector.y * math.cos(yaw) - field_vector.x * math.sin(yaw)
+        field.x = field_vector.y * math.sin(yaw) + field_vector.x * math.cos(yaw)
+        field.z = 0 # 这个用不到
+        magnetic_field_msg.signal_strength = math.abs(field.y)
+
 
         self.magnetic_field_publisher.publish(magnetic_field_msg)
 
