@@ -70,7 +70,7 @@ class Robot:
             current = magnetic_field_msg.current_milliamps,
             pipeline_heading_degrees = magnetic_field_msg.pipeline_heading_degrees,
             signal_strength_percent = magnetic_field_msg.signal_strength_percent,
-            left_arrow = magnetic_field_msg.left_arrow,
+            left_arrow = magnetic_field_msg.left_arrow,  # notice: 指的是出现在左边的，指示机器向右的箭头，这表明机器本身在管线左边
             right_arrow = magnetic_field_msg.right_arrow,
             stamp_sec=float(stamp.sec) + float(stamp.nanosec) * 1e-9,
             frame_id=magnetic_field_msg.header.frame_id,
@@ -148,7 +148,7 @@ class MissionNode(Node):
         self.declare_parameter('loss_threshold', 0.08)
         self.declare_parameter('center_magnetic_z_threshold', 0.05)
         self.declare_parameter('search_probe_distance', 0.75)
-        self.declare_parameter('centering_step', 0.2)
+        self.declare_parameter('centering_step', 0.25)
         self.declare_parameter('forward_step', 1.0)
         self.declare_parameter('reacquire_probe_offset', 0.4)
         self.declare_parameter('follow_heading_degrees', 0.0)
@@ -203,7 +203,7 @@ class MissionNode(Node):
         self.phase = "normal"
         self.rotation_count = 0
         self.max_yaw = 0
-        self.max_signal = 0
+        self.max_signal = float('-inf')
 
         self.state_subscription = self.create_subscription(
             Odometry,
@@ -240,22 +240,41 @@ class MissionNode(Node):
             if self.robot.active_goal is not None and not self.robot.has_arrived():
                 return
             if self.robot.has_arrived():
+                self.last_search_target_yaw = self.robot.active_goal.yaw
                 self.robot.active_goal = None
-                if self.max_signal < self.robot.reading.signal_strength:
-                    self.max_yaw = self.robot.pose.yaw
-                    self.max_signal = self.robot.reading.signal_strength
-            if self.rotation_count < 12:
-                self.rotation_count += 1
-                self.robot.move_to(self.robot.pose.x, self.robot.pose.y, self.robot.pose.yaw + math.radians(30))
+                self.wait_reading_after_stamp = self.robot.reading.stamp_sec
+                self.phase = "rotation_trial_wait_reading"
+                return
+
+        if self.phase == "rotation_trial_wait_reading":
+            if self.robot.reading.stamp_sec <= self.wait_reading_after_stamp:
                 return
             else:
-                self.phase = "normal"
-                dx = math.cos(self.max_yaw) * self.search_probe_distance
-                dy = math.sin(self.max_yaw) * self.search_probe_distance
-                self._issue_move_by(dx, dy, self.max_yaw, 'search peak')
-                self.rotation_count = 0
-                self.max_yaw = 0
-                self.max_signal = 0
+                self.phase = "rotation_trial"
+                self.rotation_count += 1
+                if self.robot.reading.left_arrow or self.robot.reading.right_arrow:
+                    self.phase = "normal"
+                    self.rotation_count = 0
+                    self.max_yaw = 0
+                    self.max_signal = float('-inf')
+                    self._transition(MissionState.CENTER_ON_LINE, 'detected magnetic signal during rotation trial')
+                    return
+                if self.max_signal < self.robot.reading.signal_strength:
+                    self.max_yaw = self.last_search_target_yaw # 无噪声
+                    self.max_signal = self.robot.reading.signal_strength
+                if self.rotation_count < 12:
+                    next_yaw = (self.search_base_yaw + self.rotation_count * math.radians(30)) % (2 * math.pi)
+                    self.robot.move_to(self.robot.pose.x, self.robot.pose.y, next_yaw)
+                    return
+                else:
+                    self.phase = "normal"
+                    dx = math.cos(self.max_yaw) * self.search_probe_distance
+                    dy = math.sin(self.max_yaw) * self.search_probe_distance
+                    self._issue_move_by(dx, dy, self.max_yaw, 'search peak')
+                    self.rotation_count = 0
+                    self.max_yaw = 0
+                    self.max_signal = float('-inf')
+                    return
                 return
 
         if self.robot.active_goal is not None:
@@ -271,7 +290,7 @@ class MissionNode(Node):
         for _ in range(8):
             if self.done or self.robot.active_goal is not None:
                 return
-            if not self._tick_state_without_active_goal(): # 如果不循环，则在切换状态的时候就要耗时不少
+            if not self._tick_state_without_active_goal(): # quickly skip state switching
                 return
 
     def _tick_state_without_active_goal(self):
@@ -288,9 +307,12 @@ class MissionNode(Node):
 
         if self.state == MissionState.CENTER_ON_LINE:
             if reading.left_arrow and reading.right_arrow: # notice: check
-                self.line_confirmed = signal >= self.loss_threshold # notice: should be converted to l-r arrows
-                self.follow_moves_since_center = 0
+                self.line_confirmed = True # notice: whether to trust the arrows
+                self.follow_moves_since_center = 0 # notice: seems not necessary
                 self._transition(MissionState.MEASURE_ON_LINE, 'centered on magnetic line')
+                return True
+            elif (not reading.left_arrow) and (not reading.right_arrow):
+                self._transition(MissionState.REACQUIRE, 'lost magnetic line')
                 return True
             self._issue_lateral_move(self.centering_step, 'center on line')
             return False
@@ -325,9 +347,12 @@ class MissionNode(Node):
         if self.robot.reading.left_arrow or self.robot.reading.right_arrow:
             return
         self.phase = "rotation_trial"
+        self.search_base_yaw = self.robot.pose.yaw
         self.rotation_count = 0
         self.max_yaw = self.robot.pose.yaw
-        self.max_signal = self.robot.reading.signal_strength
+        self.max_signal = float('-inf')
+        next_yaw = (self.search_base_yaw + self.rotation_count * math.radians(30)) % (2 * math.pi)
+        self.robot.move_to(self.robot.pose.x, self.robot.pose.y, next_yaw)
         return
         
         
@@ -344,15 +369,14 @@ class MissionNode(Node):
         reading = self.robot.reading
         if reading.left_arrow and reading.right_arrow:
             return # notice: 是否会有潜在的问题
-        else:
-            correction = -math.copysign(step_size, reading.magnetic_z)
+        if not reading.left_arrow and not reading.right_arrow:
+            return
+        
+        side = -1.0 if reading.left_arrow else 1.0
+        yaw = self.robot.pose.yaw
+        dx = -math.sin(yaw) * side * step_size
+        dy = math.cos(yaw) * side * step_size
 
-        heading_rad = math.radians(self.follow_heading_degrees)
-        left_x = -math.sin(heading_rad)
-        left_y = math.cos(heading_rad)
-        dx = left_x * correction
-        dy = left_y * correction
-        yaw = math.atan2(dy, dx) if abs(dx) > 1e-9 or abs(dy) > 1e-9 else self.robot.pose.yaw
         self._issue_move_by(dx, dy, yaw, reason)
 
     def _issue_move_by(self, dx, dy, yaw, reason):

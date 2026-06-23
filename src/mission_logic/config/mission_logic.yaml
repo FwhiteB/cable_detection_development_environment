@@ -12,7 +12,7 @@ mission_node:
     loss_threshold: 0.08
     center_magnetic_z_threshold: 0.2
     search_probe_distance: 0.75
-    centering_step: 0.4
+    centering_step: 0.25
     forward_step: 0.5
     reacquire_probe_offset: 0.4
     follow_heading_degrees: 0.0
